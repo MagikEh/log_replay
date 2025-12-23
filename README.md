@@ -1,7 +1,14 @@
 # Apache2 Log Replay script
-This script is for testing production scenarios on identical non-production servers by taking an apache2 log file, ingesting it then replaying each log line, closely mimmicking the timestamp steps, to allow sysadmins to 'relive' or 'replay' events that occurred on production for testing and debugging purposes.
+This script is for testing production scenarios on identical non-production servers by taking an apache2 log file, ingesting it then replaying each log line, closely mimmicking the timestamp steps, to allow sysadmins to 'relive' or 'replay' events that occurred on production for testing, debugging, and configuration purposes.
 
-Please feel free to reach out with questions, PRs, suggestions, feature requests, and bugs in the [MagikEh/log_replay/issues](https://github.com/MagikEh/log_replay/issues)!
+Currently the script makes use of the `X-Forwarded-For` header to allow traffic to the target service to appear as if receiving unique IP requests. The webserver/cluster receiving the traffic must be setup as if it were behind a proxy where the `X-Forwarded-For` header would be enabled and in use otherwise it will log all requests as coming directly from the server where the script is being ran.
+
+### Usecases:
+- Replaying high-load events to determine rate-limiting effectiveness.
+- Replaying regular traffic to A/B test new releases and their ability to handle load.
+- Replaying a specific series of requests to determine server lockups or 500 issues.
+- Replaying a specific series of requests for CI-CD unit/acceptance testing.
+- Replaying malicious service usages to test different architecture solutions.
 
 ### Installation:
 The `aiohttp` python3 package is a required dependency of this script
@@ -46,9 +53,19 @@ options:
 ## Roadmap
 - Add a proper delegator, not a fan of having the worker threads 'react' to being late when they pick up a task.
 - NGINX support, it's nearly there but will require testing of the current `apache2_patterns` and potentially a CLI switch.
-- Make use of logFile-provided flags/headers/useragents/request methods.
+- Make use of other logFile-provided flags:
+  - `vhost`
+  - `port#`
+  - `user agent` (appended?)
+  - Request method `GET`/`POST`/`HEAD`/..etc
 - Figure out a nicer way to implement a rolling progress output while allowing capture to log file. (pipe into `tee` and see what happens)
 - Implement a more elegant mid-script stop mechanism rather than `[ctrl]`+`[c]` and a few thrown exceptions.
+- Note in readme, apache2 timestamps are logged when connection closes
+  - Future feature to integrate %D into `timestampDelta` to account for this
+- Determine the maximum throughput of this script before moving onto multi-core concurrency.
 
 ## Known Issues:
 - See the `FIXME:` comments in [the log_replay.py script](https://github.com/MagikEh/log_replay/blob/main/log_replay.py).
+
+## Contact:
+Please feel free to reach out with questions, PRs, suggestions, feature requests, and bugs in the [MagikEh/log_replay/issues](https://github.com/MagikEh/log_replay/issues)!
