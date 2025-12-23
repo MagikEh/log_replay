@@ -39,6 +39,8 @@ options:
 ./apache2_log_replay.py --help
 ./apache2_log_replay.py https://my-cool-internal-vip.sub.domain path/to/my/log/file.log
 ./apache2_log_replay.py -vvv -d5 -w1 https://my-cool-internal-vip.sub.domain /full/path/to/my/log/file.log
+
+[ctrl]+[c] to exit
 ```
 
 ## Roadmap
@@ -46,6 +48,7 @@ options:
 - NGINX support, it's nearly there but will require testing of the current `apache2_patterns` and potentially a CLI switch.
 - Make use of logFile-provided flags/headers/useragents/request methods.
 - Figure out a nicer way to implement a rolling progress output while allowing capture to log file. (pipe into `tee` and see what happens)
+- Implement a more elegant mid-script stop mechanism rather than `[ctrl]`+`[c]` and a few thrown exceptions.
 
 ## Known Issues:
 - See the `FIXME:` comments in [the log_replay.py script](https://github.com/MagikEh/log_replay/blob/main/log_replay.py).
