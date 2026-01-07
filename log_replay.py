@@ -195,7 +195,7 @@ async def main():
     for member in args.loadbalancerMembers:
       address, port = member.split(':')[:2]
       lbMembers.append((address,port))
-    connector=aiohttp.TCPConnector(limit=0,limit_per_host=0,force_close=True,ssl=False,resolver=LBResolver(lbMembers),ttl_dns_cache=1,use_dns_cache=True)
+    connector=aiohttp.TCPConnector(limit=0,limit_per_host=0,force_close=True,ssl=False,resolver=LBResolver(lbMembers),ttl_dns_cache=1,use_dns_cache=False)
   else:
     connector=aiohttp.TCPConnector(limit=0,limit_per_host=0,force_close=True,ssl=False)
   session = aiohttp.ClientSession(trust_env=True,
