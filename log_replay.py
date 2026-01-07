@@ -9,6 +9,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 import re
+from urllib.parse import urlparse
 
 # Apache2 %flag to regex mapping
 # Stolen and adapted from Kassner's log-parser: https://github.com/kassner/log-parser/blob/master/src/LogParser.php#L23-L47
@@ -46,12 +47,45 @@ total_log_lines = 0
 class URLRequest:
   def __init__(self, lineNum, url, timestamp, ip):
     self.lineNum = lineNum
-    self.url = url
+    self.url = urlparse(url)
     self.timestamp = datetime.strptime(timestamp, apache2_log_date_format)
     self.ip = ip
     logging.debug(f'New {self}')
   def __str__(self):
-    return f'URLRequest #{self.lineNum}: {self.ip} @ {self.timestamp} to "{self.url}"'
+    return f'URLRequest #{self.lineNum}: {self.ip} @ {self.timestamp} to "{self.url.geturl()}"'
+
+# Override default aiohttp resolver when using LB members: https://github.com/aio-libs/aiohttp/issues/3455#issuecomment-449780948
+# https://github.com/aio-libs/aiohttp/blob/master/aiohttp/resolver.py#L27-L82
+from aiohttp.abc import AbstractResolver, ResolveResult
+import socket
+# Lazy round-robin DNS resolver, assumes ttl_dns_cache=1 && use_dns_cache=True in the tcpconnector
+class LBResolver:
+  def __init__(self, lbMembers) -> None:
+    self.members = lbMembers
+    self.rr_count = 0
+    print(f"New RESOLVER!")
+  async def resolve(self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET) -> list[ResolveResult]:
+    print(f"RESOLVING {host} for the {self.rr_count}th time!")
+    resolved_host, resolved_port = self.members[self.rr_count%len(self.members)]
+    self.rr_count += 1
+    hosts: list[ResolveResult] = []
+    hosts.append(
+      ResolveResult(
+        # https://docs.python.org/3/library/socket.html#socket.getaddrinfo
+        hostname=host,
+        host=resolved_host,
+        port=resolved_port,
+        family= socket.AF_INET, # TODO: Only ipv4 members allowed, needs AF_INET6 for ipv6
+        proto= socket.IPPROTO_TCP,
+        flags= socket.AI_ADDRCONFIG,
+      )
+    )
+    return hosts
+
+  async def close(self) -> None:
+    pass
+
+
 
 # FIXME: Incomplete functionality
 async def delegator(workerPool, workQueue, session):
@@ -80,11 +114,17 @@ async def worker(workerPool, workQueue, total_log_lines, session):
         workerPool.append(asyncio.create_task(worker(workerPool, workQueue, total_log_lines, session)))
         logging.warning(f'Log line #{urlRequest.lineNum} is late, time-delta of {delta:.2f} seconds, added worker #{len(workerPool)}.')
       await asyncio.sleep(delta)
-      async with session.get(urlRequest.url, headers={'X-Forwarded-For': f"{urlRequest.ip}", 'User-Agent': 'log_replay'}) as response:
+      async with session.get(urlRequest.url.geturl(),
+                             headers={'Host':f"{urlRequest.url.hostname}",
+                                      'X-Forwarded-For': f"{urlRequest.ip}",
+                                      'User-Agent': 'log_replay'}
+                            ) as response:
         logging.debug(f"{urlRequest} returned {response.status}")
 
-    except (asyncio.TimeoutError, aiohttp.ServerDisconnectedError) as e:
-      logging.warning(f'{urlRequest} returned {e}.')
+    except (asyncio.TimeoutError) as e:
+      logging.debug(f'{urlRequest} timed out.')
+    except (aiohttp.ServerDisconnectedError) as e:
+      logging.warning(f'{urlRequest} unexpectidly closed.')
     except Exception as e:
       logging.exception(f'{urlRequest} returned raised exception: \"{e}\"')
     finally:
@@ -149,10 +189,20 @@ async def main():
   workQueue = parseURLs(args.BaseURL, args.LogFile, args.delaystart)
 
   logging.info(f'Setting up worker threads')
+  connector=""
+  if len(args.loadbalancerMembers) > 0:
+    lbMembers=[]
+    for member in args.loadbalancerMembers:
+      address, port = member.split(':')[:2]
+      lbMembers.append((address,port))
+    connector=aiohttp.TCPConnector(limit=0,limit_per_host=0,force_close=True,ssl=False,resolver=LBResolver(lbMembers),ttl_dns_cache=1,use_dns_cache=True)
+  else:
+    connector=aiohttp.TCPConnector(limit=0,limit_per_host=0,force_close=True,ssl=False)
   session = aiohttp.ClientSession(trust_env=True,
-                                 # timeout=aiohttp.ClientTimeout(total=5),
-                                  connector=aiohttp.TCPConnector(limit=0,limit_per_host=0)
+                                  timeout=aiohttp.ClientTimeout(total=60),
+                                  connector=connector
                                   )
+
   #FIXME: Add deligator thread that generates workers before the queue delta falls behind (currently we're adding workers only when a worker notices it is already behind)
   workerPool = []
   for i in range(args.initialWorkers):
@@ -177,6 +227,7 @@ parser.add_argument('--logformat', '-f',               default=apache2_log_combi
 parser.add_argument('--delaystart', '-d',              default=1, type=int,                 help='Period of time (in seconds) to wait between parsing logfile and beginning requests. (default: %(default)s)')
 parser.add_argument('--maximumTimeDelta', '-t',        default=-0.5, type=int,              help='Period of allowed time (in seconds) that a request may be late by before spawning a new worker. (default: %(default)s)')
 parser.add_argument('--initialWorkers', '-w',          default=50, type=int,                help='Number of initial workers that the program will start with, more are added as --maximumTimeDelta is breached. (default: %(default)s)')
+parser.add_argument('--loadbalancerMembers', '-m',     default=[], action='append',         help='A single LoadBalancer member to use, may be defined multiple times, requires format "address:port". (default: none, use baseURL)')
 parser.add_argument('BaseURL',                                                              help='Base URL of the website to target eg:"http[s]://ServerName.domain".') #FIXME: Make optional when vhost log parsing implemented
 parser.add_argument('LogFile',                                                              help='Path to the log file of entries to be replayed against BaseURL.')
 
